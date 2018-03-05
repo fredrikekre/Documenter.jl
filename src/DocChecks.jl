@@ -285,7 +285,11 @@ function checkresult(sandbox::Module, result::Result, meta::Dict, doc::Documents
         # Since checking for the prefix of an error won't catch the empty case we need
         # to check that manually with `isempty`.
         if isempty(head) || !startswith(str, head)
-            report(result, str, doc)
+            if doc.user.doctest === :fixup
+                fixup(result, str, doc)
+            else
+                report(result, str, doc)
+            end
         end
     else
         value = result.hide ? nothing : result.value # `;` hides output.
@@ -294,7 +298,13 @@ function checkresult(sandbox::Module, result::Result, meta::Dict, doc::Documents
         # Replace a standalone module name with `Main`.
         str = strip(replace(str, mod_regex_nodot => "Main"))
         str, output = filter_doctests((str, output), doc, meta)
-        str == output || report(result, str, doc)
+        if str != output
+            if doc.user.doctest === :fixup
+                fixup(result, str, doc)
+            else
+                report(result, str, doc)
+            end
+        end
     end
     return nothing
 end
@@ -337,16 +347,6 @@ end
 import .Utilities.TextDiff
 
 function report(result::Result, str, doc::Documents.Document)
-    if doc.user.doctest === :fixup # fix up the doctests instead of reporting an error
-        open(Base.find_source_file(result.file), "r+") do f
-            content = read(f, String)
-            seekstart(f)
-            truncate(f, 0)
-            content = replace(content, result.output => str)
-            write(f, content)
-        end
-        return
-    end
     iob = IOBuffer()
     ioc = IOContext(iob, :color => Base.have_color)
     println(ioc, "=====[Test Error]", "="^30)
@@ -373,6 +373,27 @@ function print_indented(buffer::IO, str::AbstractString; indent = 4)
     println(buffer)
     for line in split(str, '\n')
         println(buffer, " "^indent, line)
+    end
+end
+
+function fixup(result::Result, str, doc::Documents.Document)
+    code = result.code
+    open(Base.find_source_file(result.file), "r+") do f
+        content = read(f, String)
+        seekstart(f)
+        truncate(f, 0)
+        # first look for the entire code block
+        codeidx = findnext(code, content, 1)
+        # write everything up until the code block
+        write(f, content[1:prevind(content, first(codeidx))])
+        # next look for the particular input string in the given code block
+        inputidx = findnext(result.input, code, 1)
+        # write everything up until the input string
+        write(f, code[1:last(inputidx)])
+        # write the rest of the code block, with replaced output
+        write(f, replace(code[nextind(code, last(inputidx)):end], result.output => str, count = 1))
+        # write rest of the file
+        write(f, content[nextind(content, last(codeidx)):end])
     end
 end
 
