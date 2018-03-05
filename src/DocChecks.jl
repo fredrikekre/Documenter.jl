@@ -96,7 +96,7 @@ the document generation when an error is thrown. Use `doctest = false` keyword i
 [`Documenter.makedocs`](@ref) to disable doctesting.
 """
 function doctest(doc::Documents.Document)
-    if doc.user.doctest
+    if doc.user.doctest === :fixup || doc.user.doctest
         println(" > running doctests.")
         for (src, page) in doc.internal.pages
             empty!(page.globals.meta)
@@ -337,6 +337,16 @@ end
 import .Utilities.TextDiff
 
 function report(result::Result, str, doc::Documents.Document)
+    if doc.user.doctest === :fixup # fix up the doctests instead of reporting an error
+        open(Base.find_source_file(result.file), "r+") do f
+            content = read(f, String)
+            seekstart(f)
+            truncate(f, 0)
+            content = replace(content, result.output => str)
+            write(f, content)
+        end
+        return
+    end
     iob = IOBuffer()
     ioc = IOContext(iob, :color => Base.have_color)
     println(ioc, "=====[Test Error]", "="^30)

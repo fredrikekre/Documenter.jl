@@ -263,6 +263,11 @@ julia> @time [1,2,3,4]
     The global filters, filters defined in `@meta` blocks, and filters defined with the `filter`
     keyword argument are all applied to each doctest.
 
+## Fixing outdated Doctests
+
+To fix outdated doctests, the `doctest` flag to [`makedocs`](@ref) can be set to
+`doctest = :fixup`. This will run the doctests, and overwrite the old results.
+
 
 ## Skipping Doctests
 
