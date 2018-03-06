@@ -131,7 +131,7 @@ function doctest(block::Markdown.Code, meta::Dict, doc::Documents.Document, page
         end
 
         # Normalise line endings.
-        code = replace(block.code, "\r\n" => "\n")
+        block.code = replace(block.code, "\r\n" => "\n")
 
         # parse keyword arguments to doctest
         d = Dict()
@@ -147,7 +147,7 @@ function doctest(block::Markdown.Code, meta::Dict, doc::Documents.Document, page
                         in '$(meta[:CurrentFile])'
 
                         ```$(lang)
-                        $(code)
+                        $(block.code)
                         ```
                         """
                         )
@@ -162,11 +162,11 @@ function doctest(block::Markdown.Code, meta::Dict, doc::Documents.Document, page
             Meta.isexpr(expr, :block) && (expr.head = :toplevel)
             eval(sandbox, expr)
         end
-        if contains(code, r"^julia> "m)
-            eval_repl(code, sandbox, meta, doc, page)
+        if contains(block.code, r"^julia> "m)
+            eval_repl(block, sandbox, meta, doc, page)
             block.language = "julia-repl"
-        elseif contains(code, r"^# output$"m)
-            eval_script(code, sandbox, meta, doc, page)
+        elseif contains(block.code, r"^# output$"m)
+            eval_script(block, sandbox, meta, doc, page)
             block.language = "julia"
         else
             push!(doc.internal.errors, :doctest)
@@ -175,7 +175,7 @@ function doctest(block::Markdown.Code, meta::Dict, doc::Documents.Document, page
                 Invalid doctest block. Requires `julia> ` or `# output` in '$(meta[:CurrentFile])'
 
                 ```$(lang)
-                $(code)
+                $(block.code)
                 ```
                 """
             )
@@ -194,23 +194,23 @@ end
 # Doctest evaluation.
 
 mutable struct Result
-    code   :: String # The entire code block that is being tested.
-    input  :: String # Part of `code` representing the current input.
-    output :: String # Part of `code` representing the current expected output.
+    block   :: Markdown.Code # The entire code block that is being tested.
+    input  :: String # Part of `block.code` representing the current input.
+    output :: String # Part of `block.code` representing the current expected output.
     file   :: String # File in which the doctest is written. Either `.md` or `.jl`.
     value  :: Any        # The value returned when evaluating `input`.
     hide   :: Bool       # Semi-colon suppressing the output?
     stdout :: IOBuffer   # Redirected stdout/stderr gets sent here.
     bt     :: Vector     # Backtrace when an error is thrown.
 
-    function Result(code, input, output, file)
-        new(code, input, rstrip(output, '\n'), file, nothing, false, IOBuffer())
+    function Result(block, input, output, file)
+        new(block, input, rstrip(output, '\n'), file, nothing, false, IOBuffer())
     end
 end
 
-function eval_repl(code, sandbox, meta::Dict, doc::Documents.Document, page)
-    for (input, output) in repl_splitter(code)
-        result = Result(code, input, output, meta[:CurrentFile])
+function eval_repl(block, sandbox, meta::Dict, doc::Documents.Document, page)
+    for (input, output) in repl_splitter(block.code)
+        result = Result(block, input, output, meta[:CurrentFile])
         for (ex, str) in Utilities.parseblock(input, doc, page; keywords = false)
             # Input containing a semi-colon gets suppressed in the final output.
             result.hide = Documenter.REPL.ends_with_semicolon(str)
@@ -232,14 +232,14 @@ function eval_repl(code, sandbox, meta::Dict, doc::Documents.Document, page)
     end
 end
 
-function eval_script(code, sandbox, meta::Dict, doc::Documents.Document, page)
+function eval_script(block, sandbox, meta::Dict, doc::Documents.Document, page)
     # TODO: decide whether to keep `# output` syntax for this. It's a bit ugly.
     #       Maybe use double blank lines, i.e.
     #
     #
     #       to mark `input`/`output` separation.
-    input, output = split(code, "\n# output\n", limit = 2)
-    result = Result(code, "", output, meta[:CurrentFile])
+    input, output = split(block.code, "\n# output\n", limit = 2)
+    result = Result(block, "", output, meta[:CurrentFile])
     for (ex, str) in Utilities.parseblock(input, doc, page; keywords = false)
         (value, success, backtrace, text) = Utilities.withoutput() do
             Core.eval(sandbox, ex)
@@ -353,8 +353,8 @@ function report(result::Result, str, doc::Documents.Document)
     println(ioc)
     printstyled(ioc, "> File: ", result.file, "\n", color=:cyan)
     printstyled(ioc, "\n> Code block:\n", color=:cyan)
-    println(ioc, "\n```jldoctest")
-    println(ioc, result.code)
+    println(ioc, "\n```$(result.block.language)")
+    println(ioc, result.block.code)
     println(ioc, "```")
     if !isempty(result.input)
         printstyled(ioc, "\n> Subexpression:\n", color=:cyan)
@@ -377,7 +377,7 @@ function print_indented(buffer::IO, str::AbstractString; indent = 4)
 end
 
 function fixup(result::Result, str, doc::Documents.Document)
-    code = result.code
+    code = result.block.code
     open(Base.find_source_file(result.file), "r+") do f
         content = read(f, String)
         seekstart(f)
@@ -390,8 +390,13 @@ function fixup(result::Result, str, doc::Documents.Document)
         inputidx = findnext(result.input, code, 1)
         # write everything up until the input string
         write(f, code[1:last(inputidx)])
+        # replace bad output with new output
+        newcode = replace(code[nextind(code, last(inputidx)):end], result.output => str, count = 1)
+        # replace internal code block too, needed if we come back
+        # looking to replace output in the same code block later
+        result.block.code = newcode
         # write the rest of the code block, with replaced output
-        write(f, replace(code[nextind(code, last(inputidx)):end], result.output => str, count = 1))
+        write(f, newcode)
         # write rest of the file
         write(f, content[nextind(content, last(codeidx)):end])
     end
